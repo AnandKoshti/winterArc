@@ -24,6 +24,34 @@ export function getTodayString(): string {
   return format(new Date(), "yyyy-MM-dd");
 }
 
+/** Consecutive calendar days with ≥1 goal completion (today or yesterday must be active). */
+export function computeDayStreak(completionDates: string[], today = getTodayString()): number {
+  const unique = Array.from(
+    new Set(completionDates.map((d) => d.slice(0, 10)).filter(Boolean))
+  ).sort((a, b) => (a < b ? 1 : a > b ? -1 : 0));
+
+  if (unique.length === 0) return 0;
+
+  const mostRecent = unique[0];
+  const yesterday = format(addDays(parseISO(today), -1), "yyyy-MM-dd");
+
+  // Streak broken if last active day is before yesterday
+  if (mostRecent < yesterday) return 0;
+
+  let streak = 1;
+  let cursor = mostRecent;
+  for (let i = 1; i < unique.length; i++) {
+    const expected = format(addDays(parseISO(cursor), -1), "yyyy-MM-dd");
+    if (unique[i] === expected) {
+      streak += 1;
+      cursor = unique[i];
+    } else {
+      break;
+    }
+  }
+  return streak;
+}
+
 export function isDateToday(date: string): boolean {
   return isToday(parseISO(date));
 }

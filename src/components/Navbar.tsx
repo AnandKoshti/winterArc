@@ -1,7 +1,8 @@
 "use client";
 
 import Link from "next/link";
-import { usePathname } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
+import { useEffect } from "react";
 import {
   LayoutDashboard, Snowflake, Target, Swords, Trophy, Gift, Users, User,
 } from "lucide-react";
@@ -16,12 +17,19 @@ const ICONS: Record<string, React.ComponentType<{ size?: number }>> = {
 
 export function Navbar() {
   const pathname = usePathname();
+  const router = useRouter();
   const currentUser = useAppStore((s) => s.currentUser);
+
+  useEffect(() => {
+    NAV_ITEMS.forEach((item) => {
+      router.prefetch(item.href);
+    });
+  }, [router]);
 
   return (
     <nav className="hidden lg:flex fixed top-0 left-0 right-0 z-40 nav-chrome border-b border-arc-border/50">
       <div className="max-w-7xl mx-auto w-full px-6 h-16 flex items-center justify-between">
-        <Link href="/dashboard" className="flex items-center gap-2">
+        <Link href="/dashboard" className="flex items-center gap-2" prefetch>
           <Snowflake className="text-frost-300" size={24} />
           <span className="font-bold text-lg tracking-wide">{APP_NAME}</span>
         </Link>
@@ -34,6 +42,7 @@ export function Navbar() {
               <Link
                 key={item.href}
                 href={item.href}
+                prefetch
                 className={cn(
                   "flex items-center gap-2 px-3 py-2 rounded-xl text-sm transition-colors",
                   active
@@ -53,7 +62,7 @@ export function Navbar() {
           {currentUser && (
             <div className="flex items-center gap-2 text-sm">
               <span className="text-arc-gold">{currentUser.coins.toLocaleString()} 🪙</span>
-              <Link href="/profile" className="font-medium hover:text-frost-300 transition-colors">
+              <Link href="/profile" prefetch className="font-medium hover:text-frost-300 transition-colors">
                 {currentUser.name}
               </Link>
             </div>

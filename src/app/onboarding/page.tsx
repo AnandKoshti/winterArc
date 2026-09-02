@@ -15,19 +15,19 @@ const STEPS = 6;
 
 export default function OnboardingPage() {
   const router = useRouter();
-  const { completeOnboarding, isAuthenticated, onboardingComplete, isLoading, supabaseMode } = useAppStore();
+  const { completeOnboarding, isAuthenticated, onboardingComplete, isLoading, authReady, supabaseMode } = useAppStore();
   const [step, setStep] = useState(0);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    if (supabaseMode && isLoading) return;
+    if (supabaseMode && (!authReady || isLoading)) return;
     if (!isAuthenticated) {
       router.replace("/login");
     } else if (onboardingComplete) {
       router.replace("/dashboard");
     }
-  }, [isAuthenticated, onboardingComplete, isLoading, supabaseMode, router]);
+  }, [isAuthenticated, onboardingComplete, isLoading, authReady, supabaseMode, router]);
   const [duration, setDuration] = useState(90);
   const [customDuration, setCustomDuration] = useState("");
   const [focusAreas, setFocusAreas] = useState<FocusArea[]>([]);

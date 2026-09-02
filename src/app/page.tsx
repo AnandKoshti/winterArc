@@ -10,15 +10,16 @@ import { TAGLINE } from "@/lib/constants";
 
 export default function HomePage() {
   const router = useRouter();
-  const { isAuthenticated, onboardingComplete } = useAppStore();
+  const { isAuthenticated, onboardingComplete, authReady, isLoading, supabaseMode } = useAppStore();
 
   useEffect(() => {
+    if (supabaseMode && (!authReady || isLoading)) return;
     if (isAuthenticated && onboardingComplete) {
       router.replace("/dashboard");
     } else if (isAuthenticated && !onboardingComplete) {
       router.replace("/onboarding");
     }
-  }, [isAuthenticated, onboardingComplete, router]);
+  }, [isAuthenticated, onboardingComplete, authReady, isLoading, supabaseMode, router]);
 
   return (
     <div className="min-h-dvh flex flex-col items-center justify-center px-6 relative overflow-hidden">

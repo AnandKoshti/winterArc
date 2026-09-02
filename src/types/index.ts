@@ -135,6 +135,25 @@ export interface Friendship {
   createdAt: string;
 }
 
+export type GroupMemberRole = "owner" | "member";
+
+export interface GroupMember {
+  groupId: string;
+  userId: string;
+  role: GroupMemberRole;
+  joinedAt: string;
+}
+
+export interface Group {
+  id: string;
+  name: string;
+  description: string;
+  creatorId: string;
+  inviteCode: string;
+  memberIds: string[];
+  createdAt: string;
+}
+
 export interface Activity {
   id: string;
   userId: string;

@@ -7,6 +7,7 @@ import {
   Friendship,
   Goal,
   GoalCompletion,
+  Group,
   Notification,
   User,
   UserBadge,
@@ -219,6 +220,18 @@ export const DEMO_FRIENDSHIPS: Friendship[] = [
   { id: "f-3", requesterId: DEMO_USER_ID, addresseeId: "user-akash", status: "accepted", createdAt: "2026-08-20T00:00:00Z" },
   { id: "f-4", requesterId: "user-dev", addresseeId: DEMO_USER_ID, status: "accepted", createdAt: "2026-08-22T00:00:00Z" },
   { id: "f-5", requesterId: "user-rahul", addresseeId: "user-jay", status: "pending", createdAt: "2026-09-01T00:00:00Z" },
+];
+
+export const DEMO_GROUPS: Group[] = [
+  {
+    id: "group-1",
+    name: "Winter Warriors",
+    description: "Our squad for the season",
+    creatorId: DEMO_USER_ID,
+    inviteCode: "ARC-WINTER",
+    memberIds: [DEMO_USER_ID, "user-rahul", "user-jay", "user-akash"],
+    createdAt: "2026-08-20T00:00:00Z",
+  },
 ];
 
 export const DEMO_CHALLENGES: Challenge[] = [

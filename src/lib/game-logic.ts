@@ -19,7 +19,7 @@ import {
   PERFECT_DAY_COIN_BONUS,
   PERFECT_DAY_XP_BONUS,
 } from "./constants";
-import { generateId, getTodayString } from "./utils";
+import { generateId, getTodayString, computeDayStreak } from "./utils";
 
 export const BADGES: Badge[] = [
   { id: "first-step", name: "First Step", description: "Complete your first goal", icon: "👣", isHidden: false, requirement: "Complete 1 goal" },
@@ -150,6 +150,13 @@ export function processGoalCompletion(
   const activeDailyGoals = allDailyGoals.filter((g) => !g.isPaused);
   const perfectDay = completedTodayCount >= activeDailyGoals.length;
 
+  const alreadyHadActivityToday = todayCompletions.some((c) =>
+    c.completedAt.startsWith(today)
+  );
+  const dates = todayCompletions.map((c) => c.completedAt);
+  if (!alreadyHadActivityToday) dates.push(today);
+  const newStreak = computeDayStreak(dates, today);
+
   return {
     xpEarned: leveledUp ? xpEarned + (levelUpInfo?.bonusXp ?? 0) : xpEarned,
     coinsEarned: leveledUp ? coinsEarned + (levelUpInfo?.bonusCoins ?? 0) : coinsEarned,
@@ -158,8 +165,8 @@ export function processGoalCompletion(
     levelUpInfo,
     newBadges: [],
     perfectDay,
-    streakUpdated: true,
-    newStreak: user.streak + 1,
+    streakUpdated: !alreadyHadActivityToday,
+    newStreak,
   };
 }
 

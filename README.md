@@ -42,8 +42,7 @@ In **Supabase → Authentication → URL Configuration**:
   - `https://your-app.vercel.app/auth/callback`
   - `http://localhost:3000/**` (for local dev)
 
-If you use Google sign-in, also add your Vercel URL in **Google Cloud Console → OAuth redirect URIs**:
-- `https://YOUR_PROJECT.supabase.co/auth/v1/callback`
+If you just signed up, confirm the verification email, then sign in. The link redirects through `/auth/callback`.
 
 ### 3. Run database SQL (once)
 
@@ -52,13 +51,16 @@ In **Supabase → SQL Editor**, run in order:
 1. `supabase/schema.sql`
 2. `supabase/auth-fix.sql`
 3. `supabase/onboarding-fix.sql`
-4. `supabase/rpc.sql`
+4. `supabase/rpc.sql` (includes day-streak fix — re-run if you already applied an older version)
+5. `supabase/groups.sql` (friend groups + group leaderboards)
+6. `supabase/streak-fix.sql` (if streak already looks like total goal count — run this)
+7. `supabase/daily-battle.sql` (friend/group daily battle XP)
 
 ### 4. Verify
 
 - Login page should **not** show "Demo mode"
-- Email/password signup and login should work
-- Google sign-in redirects through `/auth/callback`
+- Email/password signup shows a “check your email” prompt when confirmation is enabled
+- After verifying, sign in works and continues to onboarding/dashboard
 
 ## Demo mode (local only)
 

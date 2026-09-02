@@ -1,7 +1,7 @@
 import { createClient as createSupabaseClient } from "@supabase/supabase-js";
-import { User, Arc, Goal, GoalCompletion, UserBadge, Friendship, Challenge, Activity, Notification, XPTransaction, CoinTransaction, DailyBattle, CompletionResult } from "@/types";
+import { User, Arc, Goal, GoalCompletion, UserBadge, Friendship, Challenge, Activity, Notification, XPTransaction, CoinTransaction, DailyBattle, CompletionResult, Group } from "@/types";
 import { getTitleForLevel } from "@/lib/constants";
-import { getTodayString } from "@/lib/utils";
+import { getTodayString, computeDayStreak } from "@/lib/utils";
 import { DEMO_ACTIVITIES, DEMO_CHALLENGES, DEMO_DAILY_BATTLE } from "@/lib/demo-data";
 import { getSupabase } from "./client";
 
@@ -47,22 +47,44 @@ export async function signUpWithProfile(
   password: string,
   name: string,
   username: string
-) {
+): Promise<{ userId: string; needsEmailVerification: boolean } | { alreadyRegistered: true }> {
   const sb = getSupabase();
   const { data, error } = await sb.auth.signUp({
     email,
     password,
     options: {
       data: { name, username: username.toLowerCase() },
+      emailRedirectTo: `${typeof window !== "undefined" ? window.location.origin : ""}/auth/callback`,
     },
   });
-  if (error) throw error;
+
+  if (error) {
+    const msg = error.message.toLowerCase();
+    if (
+      msg.includes("already") ||
+      msg.includes("registered") ||
+      msg.includes("exists") ||
+      error.code === "user_already_exists"
+    ) {
+      return { alreadyRegistered: true };
+    }
+    throw error;
+  }
   if (!data.user) throw new Error("Signup failed");
 
-  // Profile is created by DB trigger; upsert as fallback if trigger not installed yet
-  await ensureProfile(data.user.id, email, name, username.toLowerCase());
+  // Supabase returns an empty identities array when the email is already registered
+  if (Array.isArray(data.user.identities) && data.user.identities.length === 0) {
+    return { alreadyRegistered: true };
+  }
 
-  return data.user;
+  const confirmed = Boolean(data.user.email_confirmed_at || data.user.confirmed_at);
+  const needsEmailVerification = !data.session || !confirmed;
+
+  if (data.session && confirmed) {
+    await ensureProfile(data.user.id, email, name, username.toLowerCase());
+  }
+
+  return { userId: data.user.id, needsEmailVerification };
 }
 
 export async function ensureProfile(
@@ -97,16 +119,29 @@ export async function ensureProfile(
 export async function signIn(email: string, password: string) {
   const sb = getSupabase();
   const { data, error } = await sb.auth.signInWithPassword({ email, password });
-  if (error) throw error;
+  if (error) {
+    const msg = error.message.toLowerCase();
+    if (
+      msg.includes("confirm") ||
+      msg.includes("verif") ||
+      msg.includes("not confirmed") ||
+      error.code === "email_not_confirmed"
+    ) {
+      throw new Error("EMAIL_NOT_CONFIRMED");
+    }
+    throw error;
+  }
   return data.user;
 }
 
-export async function signInWithGoogle() {
+export async function resendSignupVerification(email: string) {
   const sb = getSupabase();
-  const redirectTo = `${window.location.origin}/auth/callback`;
-  const { error } = await sb.auth.signInWithOAuth({
-    provider: "google",
-    options: { redirectTo },
+  const { error } = await sb.auth.resend({
+    type: "signup",
+    email,
+    options: {
+      emailRedirectTo: `${typeof window !== "undefined" ? window.location.origin : ""}/auth/callback`,
+    },
   });
   if (error) throw error;
 }
@@ -196,6 +231,25 @@ export async function loadUserData(userId: string, email?: string) {
     multiplier: Number(c.multiplier),
   }));
 
+  // Day streak = consecutive days with activity, not total goal completions
+  const computedStreak = computeDayStreak(completions.map((c) => c.completedAt));
+  const currentUser = {
+    ...mapProfile(profile, email),
+    streak: computedStreak,
+    longestStreak: Math.max(profile.longest_streak ?? 0, computedStreak),
+  };
+
+  // Keep DB in sync when streak was previously inflated
+  if ((profile.streak ?? 0) !== computedStreak) {
+    void sb
+      .from("profiles")
+      .update({
+        streak: computedStreak,
+        longest_streak: Math.max(profile.longest_streak ?? 0, computedStreak),
+      })
+      .eq("id", userId);
+  }
+
   const userBadges: UserBadge[] = (badgesRes.data ?? []).map((b) => ({
     id: b.id,
     userId: b.user_id,
@@ -211,7 +265,37 @@ export async function loadUserData(userId: string, email?: string) {
     createdAt: f.created_at,
   }));
 
-  const allUsers: User[] = (allUsersRes.data ?? []).map((p) => mapProfile(p as ProfileRow));
+  const userMap = new Map<string, User>();
+  (allUsersRes.data ?? []).forEach((p) => {
+    const u = mapProfile(p as ProfileRow);
+    userMap.set(u.id, u);
+  });
+
+  // Ensure friend profiles are available even if outside global top 20
+  const friendIds = friendships
+    .map((f) => (f.requesterId === userId ? f.addresseeId : f.requesterId))
+    .filter((id) => id !== userId && !userMap.has(id));
+  if (friendIds.length) {
+    const { data: friendProfiles } = await sb.from("profiles").select("*").in("id", friendIds);
+    (friendProfiles ?? []).forEach((p) => {
+      const u = mapProfile(p as ProfileRow);
+      userMap.set(u.id, u);
+    });
+  }
+
+  const { groups, memberProfileIds } = await loadUserGroups(userId);
+  const missingMemberIds = memberProfileIds.filter((id) => !userMap.has(id));
+  if (missingMemberIds.length) {
+    const { data: memberProfiles } = await sb.from("profiles").select("*").in("id", missingMemberIds);
+    (memberProfiles ?? []).forEach((p) => {
+      const u = mapProfile(p as ProfileRow);
+      userMap.set(u.id, u);
+    });
+  }
+
+  const allUsers: User[] = Array.from(userMap.values())
+    .map((u) => (u.id === userId ? { ...u, streak: computedStreak, longestStreak: currentUser.longestStreak } : u))
+    .sort((a, b) => b.xp - a.xp);
 
   const participantMap = new Map<string, string[]>();
   const challengeRows = challengesRes.data?.length ? challengesRes.data : DEMO_CHALLENGES;
@@ -285,11 +369,42 @@ export async function loadUserData(userId: string, email?: string) {
     .filter((t) => t.createdAt.startsWith(today))
     .reduce((s, t) => s + t.amount, 0);
 
-  const battleEntries = allUsers.map((u) => ({
-    userId: u.id,
-    xpToday: u.id === userId ? todayXp : 0,
-    rank: 0,
-  })).sort((a, b) => b.xpToday - a.xpToday).map((e, i) => ({ ...e, rank: i + 1 }));
+  const battleParticipantIds = Array.from(
+    new Set([
+      userId,
+      ...friendships
+        .filter((f) => f.status === "accepted")
+        .map((f) => (f.requesterId === userId ? f.addresseeId : f.requesterId)),
+      ...groups.flatMap((g) => g.memberIds),
+    ])
+  );
+
+  const xpTodayByUser = new Map<string, number>();
+  xpTodayByUser.set(userId, todayXp);
+
+  if (battleParticipantIds.length > 1) {
+    try {
+      const { data: dailyXpRows } = await sb.rpc("get_daily_battle_xp", {
+        p_user_ids: battleParticipantIds,
+      });
+      (dailyXpRows ?? []).forEach((row: { user_id: string; xp_today: number }) => {
+        xpTodayByUser.set(row.user_id, Number(row.xp_today) || 0);
+      });
+      // Prefer local ledger for current user (most up to date after completions)
+      xpTodayByUser.set(userId, todayXp);
+    } catch {
+      /* RPC may not be installed yet — fall back to current user only */
+    }
+  }
+
+  const battleEntries = battleParticipantIds
+    .map((id) => ({
+      userId: id,
+      xpToday: xpTodayByUser.get(id) ?? 0,
+      rank: 0,
+    }))
+    .sort((a, b) => b.xpToday - a.xpToday)
+    .map((e, i) => ({ ...e, rank: i + 1 }));
 
   const dailyBattle: DailyBattle = {
     id: `battle-${today}`,
@@ -299,13 +414,14 @@ export async function loadUserData(userId: string, email?: string) {
   };
 
   return {
-    currentUser: mapProfile(profile, email),
+    currentUser,
     onboardingComplete: profile.onboarding_complete ?? false,
     arc,
     goals,
     completions,
     userBadges,
     friendships,
+    groups,
     allUsers,
     challenges,
     activities,
@@ -314,6 +430,129 @@ export async function loadUserData(userId: string, email?: string) {
     notifications,
     dailyBattle,
   };
+}
+
+function generateInviteCode(): string {
+  const alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+  let code = "";
+  for (let i = 0; i < 6; i++) code += alphabet[Math.floor(Math.random() * alphabet.length)];
+  return `ARC-${code}`;
+}
+
+async function loadUserGroups(userId: string): Promise<{ groups: Group[]; memberProfileIds: string[] }> {
+  const sb = getSupabase();
+  try {
+    const { data: memberships, error } = await sb
+      .from("group_members")
+      .select("group_id")
+      .eq("user_id", userId);
+    if (error || !memberships?.length) return { groups: [], memberProfileIds: [] };
+
+    const groupIds = memberships.map((m) => m.group_id);
+    const [{ data: groupRows }, { data: memberRows }] = await Promise.all([
+      sb.from("groups").select("*").in("id", groupIds),
+      sb.from("group_members").select("*").in("group_id", groupIds),
+    ]);
+
+    const membersByGroup = new Map<string, string[]>();
+    const memberProfileIds: string[] = [];
+    (memberRows ?? []).forEach((m) => {
+      const list = membersByGroup.get(m.group_id) ?? [];
+      list.push(m.user_id);
+      membersByGroup.set(m.group_id, list);
+      memberProfileIds.push(m.user_id);
+    });
+
+    const groups: Group[] = (groupRows ?? []).map((g) => ({
+      id: g.id,
+      name: g.name,
+      description: g.description ?? "",
+      creatorId: g.creator_id,
+      inviteCode: g.invite_code,
+      memberIds: membersByGroup.get(g.id) ?? [],
+      createdAt: g.created_at,
+    }));
+
+    return { groups, memberProfileIds: [...new Set(memberProfileIds)] };
+  } catch {
+    return { groups: [], memberProfileIds: [] };
+  }
+}
+
+export async function createGroupDb(
+  creatorId: string,
+  name: string,
+  description: string,
+  memberIds: string[]
+): Promise<Group | null> {
+  const sb = getSupabase();
+  const inviteCode = generateInviteCode();
+  const { data: group, error } = await sb
+    .from("groups")
+    .insert({
+      name: name.trim(),
+      description: description.trim(),
+      creator_id: creatorId,
+      invite_code: inviteCode,
+    })
+    .select("*")
+    .single();
+  if (error || !group) throw new Error(error?.message ?? "Could not create group");
+
+  const uniqueMembers = Array.from(new Set([creatorId, ...memberIds]));
+  const rows = uniqueMembers.map((id) => ({
+    group_id: group.id,
+    user_id: id,
+    role: id === creatorId ? "owner" : "member",
+  }));
+  const { error: memberError } = await sb.from("group_members").insert(rows);
+  if (memberError) throw new Error(memberError.message);
+
+  return {
+    id: group.id,
+    name: group.name,
+    description: group.description ?? "",
+    creatorId: group.creator_id,
+    inviteCode: group.invite_code,
+    memberIds: uniqueMembers,
+    createdAt: group.created_at,
+  };
+}
+
+export async function joinGroupByCodeDb(userId: string, inviteCode: string): Promise<boolean> {
+  const sb = getSupabase();
+  const code = inviteCode.trim().toUpperCase();
+  const { data: group, error } = await sb.from("groups").select("id").eq("invite_code", code).maybeSingle();
+  if (error || !group) return false;
+
+  const { error: joinError } = await sb.from("group_members").upsert({
+    group_id: group.id,
+    user_id: userId,
+    role: "member",
+  });
+  return !joinError;
+}
+
+export async function leaveGroupDb(groupId: string, userId: string): Promise<void> {
+  const sb = getSupabase();
+  const { error } = await sb
+    .from("group_members")
+    .delete()
+    .eq("group_id", groupId)
+    .eq("user_id", userId);
+  if (error) throw error;
+}
+
+export async function addFriendsToGroupDb(groupId: string, memberIds: string[]): Promise<void> {
+  const sb = getSupabase();
+  if (!memberIds.length) return;
+  const rows = memberIds.map((id) => ({
+    group_id: groupId,
+    user_id: id,
+    role: "member",
+  }));
+  const { error } = await sb.from("group_members").upsert(rows);
+  if (error) throw error;
 }
 
 export async function completeGoalRpc(goalId: string): Promise<CompletionResult> {
@@ -522,3 +761,4 @@ export async function markAllNotificationsReadDb(userId: string) {
   const sb = getSupabase();
   await sb.from("notifications").update({ read: true }).eq("user_id", userId).eq("read", false);
 }
+

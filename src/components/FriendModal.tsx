@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Modal } from "./ui/Modal";
 import { Input } from "./ui/Input";
 import { Button } from "./ui/Button";
@@ -14,16 +14,45 @@ interface FriendModalProps {
 export function FriendModal({ open, onClose, onInvite }: FriendModalProps) {
   const [username, setUsername] = useState("");
   const [message, setMessage] = useState("");
+  const [isError, setIsError] = useState(false);
   const [copied, setCopied] = useState(false);
+  const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    if (!open) {
+      setMessage("");
+      setIsError(false);
+      setUsername("");
+      setLoading(false);
+    }
+  }, [open]);
 
   const inviteLink = typeof window !== "undefined"
     ? `${window.location.origin}/signup?ref=winter-arc`
     : "/signup?ref=winter-arc";
 
   const handleInvite = async () => {
-    const success = await onInvite(username);
-    setMessage(success ? "Friend request sent!" : "User not found or already friends.");
-    if (success) setUsername("");
+    const target = username.trim().replace(/^@/, "");
+    if (!target) return;
+    setLoading(true);
+    setMessage("");
+    setIsError(false);
+    try {
+      const success = await onInvite(target);
+      if (success) {
+        setMessage(`Invite sent to @${target}`);
+        setIsError(false);
+        setUsername("");
+      } else {
+        setMessage(`Could not invite @${target}. User not found or already friends.`);
+        setIsError(true);
+      }
+    } catch {
+      setMessage(`Could not invite @${target}. Please try again.`);
+      setIsError(true);
+    } finally {
+      setLoading(false);
+    }
   };
 
   const copyLink = () => {
@@ -42,14 +71,28 @@ export function FriendModal({ open, onClose, onInvite }: FriendModalProps) {
             placeholder="Enter username"
             value={username}
             onChange={(e) => setUsername(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") {
+                e.preventDefault();
+                void handleInvite();
+              }
+            }}
           />
-          <Button onClick={handleInvite} disabled={!username.trim()}>Send</Button>
+          <Button onClick={handleInvite} disabled={!username.trim()} loading={loading}>
+            Send
+          </Button>
         </div>
 
         {message && (
-          <p className={`text-sm ${message.includes("sent") ? "text-arc-success" : "text-arc-danger"}`}>
+          <div
+            className={`rounded-xl px-4 py-3 text-sm border ${
+              isError
+                ? "bg-arc-danger/10 border-arc-danger/30 text-arc-danger"
+                : "bg-arc-success/10 border-arc-success/30 text-arc-success"
+            }`}
+          >
             {message}
-          </p>
+          </div>
         )}
 
         <div className="border-t border-arc-border pt-4">

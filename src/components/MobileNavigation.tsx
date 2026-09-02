@@ -1,7 +1,8 @@
 "use client";
 
 import Link from "next/link";
-import { usePathname } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
+import { useEffect } from "react";
 import { Home, Target, Swords, Trophy, User } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { MOBILE_NAV_ITEMS } from "@/lib/constants";
@@ -12,6 +13,13 @@ const ICONS: Record<string, React.ComponentType<{ size?: number }>> = {
 
 export function MobileNavigation() {
   const pathname = usePathname();
+  const router = useRouter();
+
+  useEffect(() => {
+    MOBILE_NAV_ITEMS.forEach((item) => {
+      router.prefetch(item.href);
+    });
+  }, [router]);
 
   return (
     <nav className="lg:hidden fixed bottom-0 left-0 right-0 z-40 nav-chrome border-t border-arc-border/50 safe-area-bottom">
@@ -23,6 +31,7 @@ export function MobileNavigation() {
             <Link
               key={item.href}
               href={item.href}
+              prefetch
               className={cn(
                 "flex flex-col items-center gap-0.5 px-3 py-1.5 rounded-xl transition-colors min-w-[56px]",
                 active ? "text-frost-300" : "text-arc-muted"

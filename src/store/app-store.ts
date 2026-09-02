@@ -11,6 +11,7 @@ import {
   Friendship,
   Goal,
   GoalCompletion,
+  Group,
   LevelUpInfo,
   Notification,
   OnboardingData,
@@ -28,6 +29,7 @@ import {
   DEMO_DAILY_BATTLE,
   DEMO_FRIENDSHIPS,
   DEMO_GOALS,
+  DEMO_GROUPS,
   DEMO_NOTIFICATIONS,
   DEMO_USER_BADGES,
   DEMO_USER_ID,
@@ -62,6 +64,11 @@ import {
   joinChallengeDb,
   markNotificationReadDb,
   markAllNotificationsReadDb,
+  createGroupDb,
+  joinGroupByCodeDb,
+  leaveGroupDb,
+  addFriendsToGroupDb,
+  resendSignupVerification,
 } from "@/lib/supabase/database";
 
 interface AppState {
@@ -69,12 +76,14 @@ interface AppState {
   isAuthenticated: boolean;
   onboardingComplete: boolean;
   isLoading: boolean;
+  authReady: boolean;
   supabaseMode: boolean;
   arc: Arc | null;
   goals: Goal[];
   completions: GoalCompletion[];
   userBadges: UserBadge[];
   friendships: Friendship[];
+  groups: Group[];
   challenges: Challenge[];
   activities: Activity[];
   notifications: Notification[];
@@ -93,9 +102,14 @@ interface AppState {
   completionToast: { xp: number; coins: number } | null;
 
   setSupabaseSession: (userId: string | null, email?: string, options?: { silent?: boolean }) => Promise<void>;
-  login: (email: string, password: string) => Promise<boolean>;
-  loginWithGoogle: () => Promise<void>;
-  signup: (name: string, username: string, email: string, password: string) => Promise<boolean>;
+  login: (email: string, password: string) => Promise<"ok" | "email_not_confirmed" | "failed">;
+  signup: (
+    name: string,
+    username: string,
+    email: string,
+    password: string
+  ) => Promise<"authenticated" | "verify_email" | "email_taken" | "failed">;
+  resendVerificationEmail: (email: string) => Promise<boolean>;
   logout: () => Promise<void>;
   completeOnboarding: (data: OnboardingData) => Promise<void>;
   completeGoal: (goalId: string) => Promise<CompletionResult | null>;
@@ -111,6 +125,10 @@ interface AppState {
   acceptFriendRequest: (friendshipId: string) => Promise<void>;
   rejectFriendRequest: (friendshipId: string) => Promise<void>;
   removeFriend: (friendshipId: string) => Promise<void>;
+  createGroup: (name: string, description: string, memberIds: string[]) => Promise<Group | null>;
+  joinGroupByCode: (inviteCode: string) => Promise<boolean>;
+  leaveGroup: (groupId: string) => Promise<void>;
+  addFriendsToGroup: (groupId: string, memberIds: string[]) => Promise<void>;
   joinChallenge: (challengeId: string) => Promise<void>;
   addReaction: (activityId: string, emoji: string) => void;
   markNotificationRead: (id: string) => Promise<void>;
@@ -122,6 +140,7 @@ interface AppState {
   isGoalCompletedToday: (goalId: string) => boolean;
   getFriends: () => User[];
   getPendingRequests: () => Friendship[];
+  getGroupMembers: (groupId: string) => User[];
   initDemo: () => void;
   refreshUserData: () => Promise<void>;
 }
@@ -130,13 +149,15 @@ export const useAppStore = create<AppState>()((set, get) => ({
   currentUser: null,
   isAuthenticated: false,
   onboardingComplete: false,
-  isLoading: false,
+  isLoading: isSupabaseConfigured(),
+  authReady: !isSupabaseConfigured(),
   supabaseMode: isSupabaseConfigured(),
   arc: null,
   goals: [],
   completions: [],
   userBadges: [],
   friendships: [],
+  groups: [],
   challenges: [],
   activities: [],
   notifications: [],
@@ -156,24 +177,42 @@ export const useAppStore = create<AppState>()((set, get) => ({
 
   setSupabaseSession: async (userId, email, options) => {
     if (!userId) {
-      set({ currentUser: null, isAuthenticated: false, onboardingComplete: false, isLoading: false });
+      set({
+        currentUser: null,
+        isAuthenticated: false,
+        onboardingComplete: false,
+        isLoading: false,
+        authReady: true,
+      });
       return;
     }
-    if (!options?.silent) set({ isLoading: true });
+
+    const state = get();
+    const alreadyLoaded =
+      state.authReady &&
+      state.isAuthenticated &&
+      state.currentUser?.id === userId;
+
+    // Background refreshes / token renewals must not flash a full-page spinner
+    if (!options?.silent && !alreadyLoaded) set({ isLoading: true });
+
     try {
       const data = await loadUserData(userId, email);
       set({
         ...data,
         isAuthenticated: true,
         isLoading: false,
+        authReady: true,
         challenges: data.challenges.length ? data.challenges : DEMO_CHALLENGES,
         activities: data.activities.length ? data.activities : DEMO_ACTIVITIES,
       });
     } catch (e) {
       const message = e instanceof Error ? e.message : JSON.stringify(e);
       console.error("Failed to load user data:", message);
-      if (!options?.silent) {
-        set({ isLoading: false, isAuthenticated: false });
+      if (!options?.silent && !alreadyLoaded) {
+        set({ isLoading: false, isAuthenticated: false, authReady: true });
+      } else {
+        set({ isLoading: false, authReady: true });
       }
     }
   },
@@ -195,6 +234,7 @@ export const useAppStore = create<AppState>()((set, get) => ({
       completions: DEMO_COMPLETIONS,
       userBadges: DEMO_USER_BADGES,
       friendships: DEMO_FRIENDSHIPS,
+      groups: DEMO_GROUPS,
       challenges: DEMO_CHALLENGES,
       activities: DEMO_ACTIVITIES,
       notifications: DEMO_NOTIFICATIONS,
@@ -212,14 +252,18 @@ export const useAppStore = create<AppState>()((set, get) => ({
         const user = await signIn(email, password);
         if (!user) {
           set({ isLoading: false });
-          return false;
+          return "failed";
         }
         await get().setSupabaseSession(user.id, user.email ?? email);
-        return get().isAuthenticated;
+        set({ isLoading: false });
+        return get().isAuthenticated ? "ok" : "failed";
       } catch (e) {
         console.error("Login failed:", e instanceof Error ? e.message : e);
         set({ isLoading: false });
-        return false;
+        if (e instanceof Error && e.message === "EMAIL_NOT_CONFIRMED") {
+          return "email_not_confirmed";
+        }
+        return "failed";
       }
     }
     const demoUser = DEMO_USERS.find((u) => u.email === email) ?? DEMO_USERS[0];
@@ -232,6 +276,7 @@ export const useAppStore = create<AppState>()((set, get) => ({
       completions: DEMO_COMPLETIONS,
       userBadges: DEMO_USER_BADGES,
       friendships: DEMO_FRIENDSHIPS,
+      groups: DEMO_GROUPS,
       challenges: DEMO_CHALLENGES,
       activities: DEMO_ACTIVITIES,
       notifications: DEMO_NOTIFICATIONS,
@@ -240,36 +285,41 @@ export const useAppStore = create<AppState>()((set, get) => ({
       coinTransactions: DEMO_COIN_TRANSACTIONS,
       allUsers: DEMO_USERS,
     });
-    return true;
-  },
-
-  loginWithGoogle: async () => {
-    const { signInWithGoogle } = await import("@/lib/supabase/database");
-    await signInWithGoogle();
+    return "ok";
   },
 
   signup: async (name, username, email, password) => {
     if (get().supabaseMode) {
       try {
+        const result = await signUpWithProfile(email, password, name, username);
+        if ("alreadyRegistered" in result) return "email_taken";
+        if (!result?.userId) return "failed";
+
+        if (result.needsEmailVerification) {
+          try {
+            await supabaseSignOut();
+          } catch {
+            /* ignore */
+          }
+          set({
+            currentUser: null,
+            isAuthenticated: false,
+            isLoading: false,
+            authReady: true,
+          });
+          return "verify_email";
+        }
+
         set({ isLoading: true });
-        const user = await signUpWithProfile(email, password, name, username);
-        if (!user) {
-          set({ isLoading: false });
-          return false;
-        }
-        // Wait for session if email confirmation is disabled
-        if (user.email_confirmed_at || user.confirmed_at) {
-          await get().setSupabaseSession(user.id, email);
-        } else {
-          // Try loading anyway — session may exist
-          await get().setSupabaseSession(user.id, email);
-        }
+        await get().setSupabaseSession(result.userId, email);
         set({ isLoading: false });
-        return true;
+        return get().isAuthenticated ? "authenticated" : "failed";
       } catch (e) {
         console.error("Signup failed:", e instanceof Error ? e.message : e);
-        set({ isLoading: false });
-        return false;
+        set({ isLoading: false, authReady: true });
+        const msg = e instanceof Error ? e.message.toLowerCase() : "";
+        if (msg.includes("already") || msg.includes("registered")) return "email_taken";
+        return "failed";
       }
     }
     const newUser: User = {
@@ -287,7 +337,18 @@ export const useAppStore = create<AppState>()((set, get) => ({
       createdAt: new Date().toISOString(),
     };
     set({ currentUser: newUser, isAuthenticated: true, onboardingComplete: false, allUsers: [...DEMO_USERS, newUser] });
-    return true;
+    return "authenticated";
+  },
+
+  resendVerificationEmail: async (email) => {
+    if (!get().supabaseMode || !email.trim()) return false;
+    try {
+      await resendSignupVerification(email.trim());
+      return true;
+    } catch (e) {
+      console.error("Resend verification failed:", e instanceof Error ? e.message : e);
+      return false;
+    }
   },
 
   logout: async () => {
@@ -523,6 +584,85 @@ export const useAppStore = create<AppState>()((set, get) => ({
     set({ friendships: get().friendships.filter((f) => f.id !== id) });
   },
 
+  createGroup: async (name, description, memberIds) => {
+    const user = get().currentUser;
+    if (!user || !name.trim()) return null;
+    if (get().supabaseMode) {
+      try {
+        const group = await createGroupDb(user.id, name, description, memberIds);
+        await get().refreshUserData();
+        return group;
+      } catch (e) {
+        console.error("Create group failed:", e instanceof Error ? e.message : e);
+        return null;
+      }
+    }
+    const group: Group = {
+      id: generateId(),
+      name: name.trim(),
+      description: description.trim(),
+      creatorId: user.id,
+      inviteCode: `ARC-${generateId().slice(0, 6).toUpperCase()}`,
+      memberIds: Array.from(new Set([user.id, ...memberIds])),
+      createdAt: new Date().toISOString(),
+    };
+    set({ groups: [...get().groups, group] });
+    return group;
+  },
+
+  joinGroupByCode: async (inviteCode) => {
+    const user = get().currentUser;
+    if (!user || !inviteCode.trim()) return false;
+    if (get().supabaseMode) {
+      const ok = await joinGroupByCodeDb(user.id, inviteCode);
+      if (ok) await get().refreshUserData();
+      return ok;
+    }
+    const code = inviteCode.trim().toUpperCase();
+    const group = get().groups.find((g) => g.inviteCode === code);
+    if (!group) return false;
+    if (group.memberIds.includes(user.id)) return true;
+    set({
+      groups: get().groups.map((g) =>
+        g.id === group.id ? { ...g, memberIds: [...g.memberIds, user.id] } : g
+      ),
+    });
+    return true;
+  },
+
+  leaveGroup: async (groupId) => {
+    const user = get().currentUser;
+    if (!user) return;
+    if (get().supabaseMode) {
+      await leaveGroupDb(groupId, user.id);
+      await get().refreshUserData();
+      return;
+    }
+    set({
+      groups: get().groups
+        .map((g) =>
+          g.id === groupId ? { ...g, memberIds: g.memberIds.filter((id) => id !== user.id) } : g
+        )
+        .filter((g) => g.memberIds.length > 0),
+    });
+  },
+
+  addFriendsToGroup: async (groupId, memberIds) => {
+    if (!memberIds.length) return;
+    if (get().supabaseMode) {
+      await addFriendsToGroupDb(groupId, memberIds);
+      await get().refreshUserData();
+      return;
+    }
+    set({
+      groups: get().groups.map((g) =>
+        g.id === groupId
+          ? { ...g, memberIds: Array.from(new Set([...g.memberIds, ...memberIds])) }
+          : g
+      ),
+    });
+  },
+
   joinChallenge: async (challengeId) => {
     const user = get().currentUser;
     if (!user) return;
@@ -574,6 +714,16 @@ export const useAppStore = create<AppState>()((set, get) => ({
     const user = get().currentUser;
     if (!user) return [];
     return get().friendships.filter((f) => f.status === "pending" && f.addresseeId === user.id);
+  },
+
+  getGroupMembers: (groupId) => {
+    const state = get();
+    const group = state.groups.find((g) => g.id === groupId);
+    if (!group) return [];
+    return group.memberIds
+      .map((id) => state.allUsers.find((u) => u.id === id) ?? (id === state.currentUser?.id ? state.currentUser : null))
+      .filter((u): u is User => Boolean(u))
+      .sort((a, b) => b.xp - a.xp);
   },
 }));
 
