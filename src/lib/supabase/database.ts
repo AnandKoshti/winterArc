@@ -103,9 +103,10 @@ export async function signIn(email: string, password: string) {
 
 export async function signInWithGoogle() {
   const sb = getSupabase();
+  const redirectTo = `${window.location.origin}/auth/callback`;
   const { error } = await sb.auth.signInWithOAuth({
     provider: "google",
-    options: { redirectTo: `${window.location.origin}/dashboard` },
+    options: { redirectTo },
   });
   if (error) throw error;
 }

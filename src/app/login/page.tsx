@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { useAppStore } from "@/store/app-store";
@@ -8,7 +8,7 @@ import { Input } from "@/components/ui/Input";
 import { Button } from "@/components/ui/Button";
 import { Snowflake } from "lucide-react";
 import { APP_NAME } from "@/lib/constants";
-import { isSupabaseConfigured } from "@/lib/supabase/client";
+import { isSupabaseConfigured, getSupabaseConfigIssue } from "@/lib/supabase/client";
 
 export default function LoginPage() {
   const router = useRouter();
@@ -19,6 +19,14 @@ export default function LoginPage() {
   const [remember, setRemember] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+  const configIssue = getSupabaseConfigIssue();
+
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    if (params.get("error") === "auth_callback") {
+      setError("Sign-in callback failed. Add your Vercel URL to Supabase Auth redirect URLs.");
+    }
+  }, []);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -63,6 +71,11 @@ export default function LoginPage() {
         </div>
 
         <form onSubmit={handleSubmit} className="glass-strong rounded-2xl p-6 space-y-4">
+          {configIssue && (
+            <p className="text-sm text-arc-gold bg-arc-gold/10 border border-arc-gold/20 rounded-xl p-3">
+              {configIssue}
+            </p>
+          )}
           <Input label="Email" type="email" value={email} onChange={(e) => setEmail(e.target.value)} required />
           <Input label="Password" type="password" value={password} onChange={(e) => setPassword(e.target.value)} required />
           {error && <p className="text-sm text-arc-danger">{error}</p>}
