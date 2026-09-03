@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useAppStore } from "@/store/app-store";
+import { CompeteEmptyCta } from "@/components/CompeteEmptyCta";
 import { LeaderboardRow } from "@/components/LeaderboardRow";
 import { Card } from "@/components/ui/Card";
 import { LeaderboardPeriod, LeaderboardCategory } from "@/types";
@@ -42,14 +43,14 @@ export default function LeaderboardPage() {
   const scopedUsers = useMemo(() => {
     if (!currentUser) return [];
     if (scope === "friends") {
-      const map = new Map(allUsers.map((u) => [u.id, u]));
+      const map = new Map<string, (typeof friends)[0]>();
       map.set(currentUser.id, currentUser);
       friends.forEach((f) => map.set(f.id, f));
       return Array.from(map.values());
     }
     if (selectedGroupId) return getGroupMembers(selectedGroupId);
     return [];
-  }, [scope, allUsers, currentUser, friends, selectedGroupId, getGroupMembers]);
+  }, [scope, currentUser, friends, selectedGroupId, getGroupMembers]);
 
   const getXp = (userId: string) => {
     if (period === "today") {
@@ -64,6 +65,7 @@ export default function LeaderboardPage() {
     .map((u) => ({ user: u, xp: getXp(u.id) }))
     .sort((a, b) => b.xp - a.xp);
 
+  const hasRivals = sorted.some((e) => e.user.id !== currentUser?.id);
   const currentRank = sorted.findIndex((e) => e.user.id === currentUser?.id) + 1;
   const currentEntry = sorted.find((e) => e.user.id === currentUser?.id);
   const leader = sorted[0];
@@ -98,11 +100,8 @@ export default function LeaderboardPage() {
       {scope === "group" && (
         <div className="space-y-3">
           {groups.length === 0 ? (
-            <Card variant="glass" className="text-center py-8">
-              <p className="text-arc-muted mb-3">Create a group with friends to unlock this board.</p>
-              <Link href="/friends" className="text-frost-300 text-sm hover:underline">
-                Go to Friends →
-              </Link>
+            <Card variant="glass">
+              <CompeteEmptyCta message="Create or join a group with friends to unlock this board." />
             </Card>
           ) : (
             <div className="flex gap-2 overflow-x-auto pb-1">
@@ -152,6 +151,7 @@ export default function LeaderboardPage() {
         ))}
       </div>
 
+      {!(scope === "group" && groups.length === 0) && (
       <Card variant="glass">
         {scope === "group" && selectedGroup && (
           <div className="mb-4 flex items-center justify-between gap-2">
@@ -164,10 +164,14 @@ export default function LeaderboardPage() {
           </div>
         )}
 
-        {sorted.length === 0 ? (
-          <p className="text-center text-arc-muted py-8">
-            {scope === "friends" ? "Add friends to see the leaderboard." : "No one on this board yet."}
-          </p>
+        {!hasRivals ? (
+          <CompeteEmptyCta
+            message={
+              scope === "friends"
+                ? "Add friends or a group to see the leaderboard."
+                : "This group needs more members. Invite friends or join another group."
+            }
+          />
         ) : (
           <div className="space-y-1">
             {sorted.map((entry, i) => (
@@ -183,7 +187,7 @@ export default function LeaderboardPage() {
           </div>
         )}
 
-        {currentUser && currentRank > 0 && (
+        {hasRivals && currentUser && currentRank > 0 && (
           <div className="mt-6 pt-4 border-t border-arc-border">
             <p className="font-bold">You are #{currentRank}</p>
             {leader && currentEntry && currentRank > 1 && (
@@ -195,6 +199,7 @@ export default function LeaderboardPage() {
           </div>
         )}
       </Card>
+      )}
     </div>
   );
 }

@@ -24,11 +24,15 @@ export function getTodayString(): string {
   return format(new Date(), "yyyy-MM-dd");
 }
 
+function uniqueCompletionDays(completionDates: string[]): string[] {
+  return Array.from(
+    new Set(completionDates.map((d) => d.slice(0, 10)).filter(Boolean))
+  ).sort();
+}
+
 /** Consecutive calendar days with ≥1 goal completion (today or yesterday must be active). */
 export function computeDayStreak(completionDates: string[], today = getTodayString()): number {
-  const unique = Array.from(
-    new Set(completionDates.map((d) => d.slice(0, 10)).filter(Boolean))
-  ).sort((a, b) => (a < b ? 1 : a > b ? -1 : 0));
+  const unique = uniqueCompletionDays(completionDates).reverse();
 
   if (unique.length === 0) return 0;
 
@@ -50,6 +54,25 @@ export function computeDayStreak(completionDates: string[], today = getTodayStri
     }
   }
   return streak;
+}
+
+/** Longest run of consecutive calendar days with ≥1 goal completion. */
+export function computeBestStreak(completionDates: string[]): number {
+  const unique = uniqueCompletionDays(completionDates);
+  if (unique.length === 0) return 0;
+
+  let best = 1;
+  let current = 1;
+  for (let i = 1; i < unique.length; i++) {
+    const expected = format(addDays(parseISO(unique[i - 1]), 1), "yyyy-MM-dd");
+    if (unique[i] === expected) {
+      current += 1;
+      best = Math.max(best, current);
+    } else {
+      current = 1;
+    }
+  }
+  return best;
 }
 
 export function isDateToday(date: string): boolean {

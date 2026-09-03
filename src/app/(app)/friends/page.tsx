@@ -16,7 +16,9 @@ export default function FriendsPage() {
   const {
     getFriends,
     getPendingRequests,
+    getSentRequests,
     allUsers,
+    friendships,
     acceptFriendRequest,
     rejectFriendRequest,
     removeFriend,
@@ -49,10 +51,17 @@ export default function FriendsPage() {
 
   const friends = getFriends();
   const pending = getPendingRequests();
+  const sent = getSentRequests();
+  const relatedIds = new Set(
+    friendships
+      .filter((f) => f.status === "pending" || f.status === "accepted")
+      .flatMap((f) => [f.requesterId, f.addresseeId])
+  );
   const searchResults = search
     ? allUsers.filter(
         (u) =>
           u.id !== currentUser?.id &&
+          !relatedIds.has(u.id) &&
           (u.username.toLowerCase().includes(search.toLowerCase()) ||
             u.name.toLowerCase().includes(search.toLowerCase()))
       )
@@ -69,6 +78,51 @@ export default function FriendsPage() {
           <UserPlus size={16} /> Invite
         </Button>
       </div>
+
+      {pending.length > 0 && (
+        <Card variant="glass">
+          <h2 className="font-bold mb-3">Pending Requests ({pending.length})</h2>
+          <div className="space-y-1">
+            {pending.map((f) => {
+              const user = allUsers.find((u) => u.id === f.requesterId);
+              if (!user) return null;
+              return (
+                <div key={f.id} className="flex items-center gap-3 py-3 border-b border-arc-border last:border-0">
+                  <Avatar name={user.name} size="sm" />
+                  <div className="flex-1 min-w-0">
+                    <p className="font-medium truncate">{user.name}</p>
+                    <p className="text-xs text-arc-muted">@{user.username} · wants to be friends</p>
+                  </div>
+                  <Button size="sm" onClick={() => acceptFriendRequest(f.id)}>Accept</Button>
+                  <Button size="sm" variant="ghost" onClick={() => rejectFriendRequest(f.id)}>Reject</Button>
+                </div>
+              );
+            })}
+          </div>
+        </Card>
+      )}
+
+      {sent.length > 0 && (
+        <Card variant="glass">
+          <h2 className="font-bold mb-3">Sent Requests ({sent.length})</h2>
+          <div className="space-y-1">
+            {sent.map((f) => {
+              const user = allUsers.find((u) => u.id === f.addresseeId);
+              if (!user) return null;
+              return (
+                <div key={f.id} className="flex items-center gap-3 py-3 border-b border-arc-border last:border-0">
+                  <Avatar name={user.name} size="sm" />
+                  <div className="flex-1 min-w-0">
+                    <p className="font-medium truncate">{user.name}</p>
+                    <p className="text-xs text-arc-muted">@{user.username} · waiting for response</p>
+                  </div>
+                  <Button size="sm" variant="ghost" onClick={() => rejectFriendRequest(f.id)}>Cancel</Button>
+                </div>
+              );
+            })}
+          </div>
+        </Card>
+      )}
 
       <Card variant="glass">
         <div className="flex items-center justify-between gap-3 flex-wrap mb-4">
@@ -171,27 +225,6 @@ export default function FriendsPage() {
         </Card>
       )}
 
-      {pending.length > 0 && (
-        <Card variant="glass">
-          <h2 className="font-bold mb-3">Pending Requests</h2>
-          {pending.map((f) => {
-            const user = allUsers.find((u) => u.id === f.requesterId);
-            if (!user) return null;
-            return (
-              <div key={f.id} className="flex items-center gap-3 py-3">
-                <Avatar name={user.name} size="sm" />
-                <div className="flex-1">
-                  <p className="font-medium">{user.name}</p>
-                  <p className="text-xs text-arc-muted">@{user.username}</p>
-                </div>
-                <Button size="sm" onClick={() => acceptFriendRequest(f.id)}>Accept</Button>
-                <Button size="sm" variant="ghost" onClick={() => rejectFriendRequest(f.id)}>Reject</Button>
-              </div>
-            );
-          })}
-        </Card>
-      )}
-
       {friends.length === 0 ? (
         <Card variant="glass" className="text-center py-12">
           <p className="text-arc-muted mb-4">Your Arc is better with competition.</p>
@@ -202,7 +235,7 @@ export default function FriendsPage() {
           <h2 className="font-bold mb-4">Your Friends ({friends.length})</h2>
           <div className="space-y-3">
             {friends.map((friend) => {
-              const friendship = useAppStore.getState().friendships.find(
+              const friendship = friendships.find(
                 (f) =>
                   f.status === "accepted" &&
                   ((f.requesterId === currentUser?.id && f.addresseeId === friend.id) ||

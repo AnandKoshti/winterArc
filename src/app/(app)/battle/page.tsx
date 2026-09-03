@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import Link from "next/link";
+import { CompeteEmptyCta } from "@/components/CompeteEmptyCta";
 import { useAppStore } from "@/store/app-store";
 import { type BattleScope } from "@/components/DailyBattle";
 import { Card } from "@/components/ui/Card";
@@ -140,17 +140,14 @@ export default function BattlePage() {
       )}
 
       <Card variant="strong">
-        {sorted.length === 0 ? (
-          <div className="text-center py-10 space-y-3">
-            <p className="text-arc-muted">
-              {battleScope === "friends"
-                ? "Add friends to join today's battle."
-                : "No group members in this battle yet."}
-            </p>
-            <Link href="/friends" className="text-frost-300 text-sm hover:underline">
-              Go to Friends →
-            </Link>
-          </div>
+        {sorted.filter((e) => e.userId !== currentUser.id).length === 0 ? (
+          <CompeteEmptyCta
+            message={
+              battleScope === "friends"
+                ? "Add friends or a group to join today's battle."
+                : "This group needs more members. Invite friends or join another group."
+            }
+          />
         ) : (
           <>
             <div className="space-y-5">
@@ -185,7 +182,7 @@ export default function BattlePage() {
         )}
       </Card>
 
-      {winnerUser && sorted.length > 0 && (
+      {winnerUser && sorted.filter((e) => e.userId !== currentUser.id).length > 0 && (
         <Card variant="glass" className="text-center">
           <p className="text-sm text-arc-muted">Current Leader</p>
           <p className="text-xl font-bold mt-1">{winnerUser.name}</p>

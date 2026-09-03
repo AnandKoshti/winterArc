@@ -180,11 +180,9 @@ export default function DashboardPage() {
   const leaderboardBlock = (
     <div>
       {boardPicker}
-      {groups.length === 0 && boardScope === "friends" && (
+      {groups.length === 0 && boardScope === "friends" && friends.length > 0 && (
         <p className="text-xs text-arc-muted mb-2">
-          Tip: create a friend group on{" "}
-          <Link href="/friends" className="text-frost-300 hover:underline">Friends</Link>
-          {" "}to pin a squad board here.
+          Tip: create a friend group to pin a squad board here.
         </p>
       )}
       {selectedGroup && (
@@ -194,7 +192,16 @@ export default function DashboardPage() {
           </Link>
         </div>
       )}
-      <Leaderboard users={leaderboardUsers} currentUserId={currentUser.id} title={boardTitle} />
+      <Leaderboard
+        users={leaderboardUsers}
+        currentUserId={currentUser.id}
+        title={boardTitle}
+        emptyMessage={
+          boardScope === "friends"
+            ? "Add friends or a group to see the leaderboard."
+            : "This group needs more members. Invite friends or join another group."
+        }
+      />
     </div>
   );
 
@@ -208,8 +215,8 @@ export default function DashboardPage() {
       groups={groups.map((g) => ({ id: g.id, name: g.name }))}
       emptyHint={
         battleScope === "friends"
-          ? "Add friends to compete in today's battle."
-          : "This group has no members in the battle yet."
+          ? "Add friends or a group to compete in today's battle."
+          : "This group needs more members. Invite friends or join another group."
       }
     />
   );

@@ -18,7 +18,7 @@ export function GoalList({ goals }: GoalListProps) {
 
   const handleToggle = useCallback(
     (goalId: string, completed: boolean) => {
-      if (completed) uncompleteGoal(goalId);
+      if (completed) void uncompleteGoal(goalId);
       else void completeGoal(goalId);
     },
     [completeGoal, uncompleteGoal]

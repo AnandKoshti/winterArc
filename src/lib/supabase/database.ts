@@ -1,7 +1,7 @@
 import { createClient as createSupabaseClient } from "@supabase/supabase-js";
 import { User, Arc, Goal, GoalCompletion, UserBadge, Friendship, Challenge, Activity, Notification, XPTransaction, CoinTransaction, DailyBattle, CompletionResult, Group } from "@/types";
 import { getTitleForLevel } from "@/lib/constants";
-import { getTodayString, computeDayStreak } from "@/lib/utils";
+import { getTodayString, computeDayStreak, computeBestStreak } from "@/lib/utils";
 import { DEMO_ACTIVITIES, DEMO_CHALLENGES, DEMO_DAILY_BATTLE } from "@/lib/demo-data";
 import { getSupabase } from "./client";
 
@@ -162,6 +162,7 @@ export async function loadUserData(userId: string, email?: string) {
     arcRes,
     goalsRes,
     completionsRes,
+    streakDatesRes,
     badgesRes,
     xpTxRes,
     coinTxRes,
@@ -175,6 +176,8 @@ export async function loadUserData(userId: string, email?: string) {
     sb.from("arcs").select("*").eq("user_id", userId).eq("is_active", true).maybeSingle(),
     sb.from("goals").select("*").eq("user_id", userId),
     sb.from("goal_completions").select("*").eq("user_id", userId).order("completed_at", { ascending: false }).limit(200),
+    // Lightweight date list for accurate day / best streak (not limited like recent completions)
+    sb.from("goal_completions").select("completed_date").eq("user_id", userId),
     sb.from("user_badges").select("*").eq("user_id", userId),
     sb.from("xp_transactions").select("*").eq("user_id", userId).order("created_at", { ascending: false }).limit(50),
     sb.from("coin_transactions").select("*").eq("user_id", userId).order("created_at", { ascending: false }).limit(50),
@@ -231,21 +234,29 @@ export async function loadUserData(userId: string, email?: string) {
     multiplier: Number(c.multiplier),
   }));
 
-  // Day streak = consecutive days with activity, not total goal completions
-  const computedStreak = computeDayStreak(completions.map((c) => c.completedAt));
+  // Day streak / best streak = consecutive calendar days with activity,
+  // never total goal completion count (that used to inflate longest_streak)
+  const streakDates = (streakDatesRes.data ?? [])
+    .map((r: { completed_date?: string }) => r.completed_date)
+    .filter(Boolean) as string[];
+  const completionDates =
+    streakDates.length > 0 ? streakDates : completions.map((c) => c.completedAt);
+  const computedStreak = computeDayStreak(completionDates);
+  const computedBestStreak = computeBestStreak(completionDates);
+  const longestStreak = Math.max(computedStreak, computedBestStreak);
   const currentUser = {
     ...mapProfile(profile, email),
     streak: computedStreak,
-    longestStreak: Math.max(profile.longest_streak ?? 0, computedStreak),
+    longestStreak,
   };
 
-  // Keep DB in sync when streak was previously inflated
-  if ((profile.streak ?? 0) !== computedStreak) {
+  // Overwrite inflated longest_streak in DB (do not keep old GREATEST value)
+  if ((profile.streak ?? 0) !== computedStreak || (profile.longest_streak ?? 0) !== longestStreak) {
     void sb
       .from("profiles")
       .update({
         streak: computedStreak,
-        longest_streak: Math.max(profile.longest_streak ?? 0, computedStreak),
+        longest_streak: longestStreak,
       })
       .eq("id", userId);
   }
@@ -413,6 +424,43 @@ export async function loadUserData(userId: string, email?: string) {
     ended: false,
   };
 
+  const hasCompetitors = battleParticipantIds.length > 1;
+  const completedToday = completions.some((c) => c.completedAt.startsWith(today));
+
+  try {
+    await ensureDailyRemindersDb({
+      userId,
+      streak: computedStreak,
+      hasCompetitors,
+      completedToday,
+    });
+  } catch {
+    /* reminders are best-effort */
+  }
+
+  let finalNotifications = notifications;
+  try {
+    const { data: refreshedNotifs } = await sb
+      .from("notifications")
+      .select("*")
+      .eq("user_id", userId)
+      .order("created_at", { ascending: false })
+      .limit(30);
+    if (refreshedNotifs) {
+      finalNotifications = refreshedNotifs.map((n) => ({
+        id: n.id,
+        userId: n.user_id,
+        type: n.type,
+        title: n.title,
+        message: n.message,
+        read: n.read,
+        createdAt: n.created_at,
+      }));
+    }
+  } catch {
+    /* keep original list */
+  }
+
   return {
     currentUser,
     onboardingComplete: profile.onboarding_complete ?? false,
@@ -427,7 +475,7 @@ export async function loadUserData(userId: string, email?: string) {
     activities,
     xpTransactions,
     coinTransactions,
-    notifications,
+    notifications: finalNotifications,
     dailyBattle,
   };
 }
@@ -569,6 +617,31 @@ export async function completeGoalRpc(goalId: string): Promise<CompletionResult>
     perfectDay: data.perfectDay,
     streakUpdated: data.streakUpdated,
     newStreak: data.newStreak,
+  };
+}
+
+export async function uncompleteGoalRpc(goalId: string): Promise<{
+  xpRemoved: number;
+  coinsRemoved: number;
+  newStreak: number;
+  newXp: number;
+  newCoins: number;
+  newLevel: number;
+}> {
+  const sb = getSupabase();
+  const { data, error } = await sb.rpc("uncomplete_goal", { p_goal_id: goalId });
+  if (error) {
+    const parts = [error.message, error.details, error.hint, error.code].filter(Boolean);
+    throw new Error(parts.join(" — ") || "Undo failed");
+  }
+  if (!data) throw new Error("Undo returned no data");
+  return {
+    xpRemoved: Number(data.xpRemoved) || 0,
+    coinsRemoved: Number(data.coinsRemoved) || 0,
+    newStreak: Number(data.newStreak) || 0,
+    newXp: Number(data.newXp) || 0,
+    newCoins: Number(data.newCoins) || 0,
+    newLevel: Number(data.newLevel) || 1,
   };
 }
 
@@ -760,5 +833,66 @@ export async function markNotificationReadDb(id: string) {
 export async function markAllNotificationsReadDb(userId: string) {
   const sb = getSupabase();
   await sb.from("notifications").update({ read: true }).eq("user_id", userId).eq("read", false);
+}
+
+export async function createNotificationDb(
+  userId: string,
+  type: Notification["type"],
+  title: string,
+  message: string
+) {
+  const sb = getSupabase();
+  const { data, error } = await sb
+    .from("notifications")
+    .insert({ user_id: userId, type, title, message, read: false })
+    .select("id")
+    .single();
+  if (error) return null;
+  return data?.id as string;
+}
+
+/** Once-per-day streak + daily battle reminders (idempotent). */
+export async function ensureDailyRemindersDb(params: {
+  userId: string;
+  streak: number;
+  hasCompetitors: boolean;
+  completedToday: boolean;
+}) {
+  const sb = getSupabase();
+  const today = getTodayString();
+  const { data: existing } = await sb
+    .from("notifications")
+    .select("title")
+    .eq("user_id", params.userId)
+    .gte("created_at", `${today}T00:00:00.000Z`);
+
+  const titles = new Set((existing ?? []).map((n: { title: string }) => n.title));
+  const inserts: { user_id: string; type: string; title: string; message: string; read: boolean }[] = [];
+
+  if (params.streak > 0 && !params.completedToday && !titles.has("Streak Reminder")) {
+    inserts.push({
+      user_id: params.userId,
+      type: "streak",
+      title: "Streak Reminder",
+      message:
+        params.streak === 1
+          ? "Complete a goal today to keep your streak alive."
+          : `Your ${params.streak}-day streak is waiting. Complete a goal today.`,
+      read: false,
+    });
+  }
+
+  if (params.hasCompetitors && !titles.has("Daily Battle")) {
+    inserts.push({
+      user_id: params.userId,
+      type: "challenge",
+      title: "Daily Battle",
+      message: "Your Daily Battle has started. Earn XP to climb the board.",
+      read: false,
+    });
+  }
+
+  if (inserts.length === 0) return;
+  await sb.from("notifications").insert(inserts);
 }
 

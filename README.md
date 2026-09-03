@@ -44,17 +44,28 @@ In **Supabase → Authentication → URL Configuration**:
 
 If you just signed up, confirm the verification email, then sign in. The link redirects through `/auth/callback`.
 
-### 3. Run database SQL (once)
+### 3. Database (automated migrations)
 
-In **Supabase → SQL Editor**, run in order:
+Do **not** paste SQL into the dashboard for every update. Use the CLI:
 
-1. `supabase/schema.sql`
-2. `supabase/auth-fix.sql`
-3. `supabase/onboarding-fix.sql`
-4. `supabase/rpc.sql` (includes day-streak fix — re-run if you already applied an older version)
-5. `supabase/groups.sql` (friend groups + group leaderboards)
-6. `supabase/streak-fix.sql` (if streak already looks like total goal count — run this)
-7. `supabase/daily-battle.sql` (friend/group daily battle XP)
+See full guide: [`supabase/MIGRATIONS.md`](./supabase/MIGRATIONS.md)
+
+```bash
+npm run db:login
+npm run db:link          # paste your project ref
+npm run db:push          # apply pending migrations
+```
+
+New schema change:
+
+```bash
+npm run db:new my_change   # edit the new file under supabase/migrations/
+npm run db:push
+```
+
+Optional: GitHub Action auto-pushes migrations on `main` (needs `SUPABASE_ACCESS_TOKEN`, `SUPABASE_PROJECT_REF`, `SUPABASE_DB_PASSWORD` secrets).
+
+Legacy one-off files still live under `supabase/*.sql` for reference; **`supabase/migrations/`** is what gets applied.
 
 ### 4. Verify
 

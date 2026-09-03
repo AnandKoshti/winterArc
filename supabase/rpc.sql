@@ -112,11 +112,53 @@ BEGIN
 END;
 $$;
 
--- Repair existing profiles where streak was incremented per goal instead of per day
+CREATE OR REPLACE FUNCTION compute_best_streak(p_user_id UUID)
+RETURNS INTEGER
+LANGUAGE plpgsql
+STABLE
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+  v_dates DATE[];
+  v_best INTEGER := 0;
+  v_current INTEGER := 0;
+  i INTEGER;
+BEGIN
+  SELECT ARRAY_AGG(d ORDER BY d ASC)
+  INTO v_dates
+  FROM (
+    SELECT DISTINCT completed_date AS d
+    FROM goal_completions
+    WHERE user_id = p_user_id
+  ) s;
+
+  IF v_dates IS NULL OR COALESCE(array_length(v_dates, 1), 0) = 0 THEN
+    RETURN 0;
+  END IF;
+
+  v_best := 1;
+  v_current := 1;
+  FOR i IN 2..array_length(v_dates, 1) LOOP
+    IF v_dates[i] = (v_dates[i - 1] + 1) THEN
+      v_current := v_current + 1;
+      IF v_current > v_best THEN
+        v_best := v_current;
+      END IF;
+    ELSE
+      v_current := 1;
+    END IF;
+  END LOOP;
+
+  RETURN v_best;
+END;
+$$;
+
+-- Repair inflated streaks (overwrite longest_streak — do not keep old per-goal counts)
 UPDATE profiles p
 SET
   streak = compute_day_streak(p.id),
-  longest_streak = GREATEST(p.longest_streak, compute_day_streak(p.id));
+  longest_streak = GREATEST(compute_day_streak(p.id), compute_best_streak(p.id));
 
 -- Complete a goal (server-validated XP/coins)
 CREATE OR REPLACE FUNCTION complete_goal(p_goal_id UUID)
@@ -147,6 +189,7 @@ DECLARE
   v_level_bonus_xp INTEGER := 0;
   v_level_bonus_coins INTEGER := 0;
   v_new_streak INTEGER;
+  v_best_streak INTEGER;
   v_streak_updated BOOLEAN := FALSE;
   v_already_today INTEGER;
   v_today DATE := (NOW() AT TIME ZONE 'UTC')::date;
@@ -209,6 +252,7 @@ BEGIN
 
   -- Day streak: consecutive days with ≥1 completion (not per-goal count)
   v_new_streak := compute_day_streak(v_user_id);
+  v_best_streak := compute_best_streak(v_user_id);
   v_streak_updated := (v_already_today = 0);
 
   UPDATE profiles SET
@@ -217,7 +261,7 @@ BEGIN
     level = v_new_level,
     title = get_title_for_level(v_new_level),
     streak = v_new_streak,
-    longest_streak = GREATEST(v_profile.longest_streak, v_new_streak)
+    longest_streak = GREATEST(v_new_streak, v_best_streak)
   WHERE id = v_user_id;
 
   INSERT INTO xp_transactions (user_id, amount, reason)
@@ -246,6 +290,88 @@ END;
 $$;
 
 GRANT EXECUTE ON FUNCTION complete_goal(UUID) TO authenticated;
+GRANT EXECUTE ON FUNCTION compute_day_streak(UUID) TO authenticated;
+GRANT EXECUTE ON FUNCTION compute_best_streak(UUID) TO authenticated;
+
+CREATE OR REPLACE FUNCTION uncomplete_goal(p_goal_id UUID)
+RETURNS JSONB
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+  v_user_id UUID := auth.uid();
+  v_goal goals%ROWTYPE;
+  v_profile profiles%ROWTYPE;
+  v_completion goal_completions%ROWTYPE;
+  v_today DATE := (NOW() AT TIME ZONE 'UTC')::date;
+  v_new_xp INTEGER;
+  v_new_coins INTEGER;
+  v_new_level INTEGER;
+  v_new_streak INTEGER;
+  v_best_streak INTEGER;
+BEGIN
+  IF v_user_id IS NULL THEN RAISE EXCEPTION 'Not authenticated'; END IF;
+
+  SELECT * INTO v_goal FROM goals WHERE id = p_goal_id AND user_id = v_user_id;
+  IF NOT FOUND THEN RAISE EXCEPTION 'Goal not found'; END IF;
+
+  SELECT * INTO v_completion
+  FROM goal_completions
+  WHERE goal_id = p_goal_id AND user_id = v_user_id AND completed_date = v_today
+  ORDER BY completed_at DESC
+  LIMIT 1;
+
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'No completion to undo today';
+  END IF;
+
+  SELECT * INTO v_profile FROM profiles WHERE id = v_user_id FOR UPDATE;
+  IF NOT FOUND THEN RAISE EXCEPTION 'Profile not found'; END IF;
+
+  DELETE FROM goal_completions WHERE id = v_completion.id;
+
+  UPDATE goals
+  SET streak = GREATEST(0, streak - 1)
+  WHERE id = p_goal_id;
+
+  v_new_xp := GREATEST(0, v_profile.xp - COALESCE(v_completion.xp_earned, 0));
+  v_new_coins := GREATEST(0, v_profile.coins - COALESCE(v_completion.coins_earned, 0));
+  v_new_level := get_level_from_xp(v_new_xp);
+  v_new_streak := compute_day_streak(v_user_id);
+  v_best_streak := compute_best_streak(v_user_id);
+
+  UPDATE profiles SET
+    xp = v_new_xp,
+    coins = v_new_coins,
+    level = v_new_level,
+    title = get_title_for_level(v_new_level),
+    streak = v_new_streak,
+    longest_streak = GREATEST(v_new_streak, v_best_streak)
+  WHERE id = v_user_id;
+
+  IF COALESCE(v_completion.xp_earned, 0) > 0 THEN
+    INSERT INTO xp_transactions (user_id, amount, reason)
+    VALUES (v_user_id, -v_completion.xp_earned, v_goal.name || ' undone');
+  END IF;
+
+  IF COALESCE(v_completion.coins_earned, 0) > 0 THEN
+    INSERT INTO coin_transactions (user_id, amount, reason)
+    VALUES (v_user_id, -v_completion.coins_earned, v_goal.name || ' undone');
+  END IF;
+
+  RETURN jsonb_build_object(
+    'xpRemoved', COALESCE(v_completion.xp_earned, 0),
+    'coinsRemoved', COALESCE(v_completion.coins_earned, 0),
+    'newStreak', v_new_streak,
+    'newXp', v_new_xp,
+    'newCoins', v_new_coins,
+    'newLevel', v_new_level
+  );
+END;
+$$;
+
+GRANT EXECUTE ON FUNCTION uncomplete_goal(UUID) TO authenticated;
 
 -- Purchase shop reward
 CREATE OR REPLACE FUNCTION purchase_reward(p_reward_id TEXT)

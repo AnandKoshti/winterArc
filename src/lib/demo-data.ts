@@ -92,6 +92,20 @@ export const DEMO_USERS: User[] = [
     streakFreezes: 0,
     createdAt: "2026-08-12T00:00:00Z",
   },
+  {
+    id: "user-priya",
+    name: "Priya",
+    username: "priya",
+    email: "priya@demo.com",
+    xp: 5200,
+    coins: 1400,
+    level: 5,
+    title: getTitleForLevel(5),
+    streak: 3,
+    longestStreak: 9,
+    streakFreezes: 0,
+    createdAt: "2026-08-18T00:00:00Z",
+  },
 ];
 
 export const DEMO_ARC: Arc = {
@@ -220,6 +234,7 @@ export const DEMO_FRIENDSHIPS: Friendship[] = [
   { id: "f-3", requesterId: DEMO_USER_ID, addresseeId: "user-akash", status: "accepted", createdAt: "2026-08-20T00:00:00Z" },
   { id: "f-4", requesterId: "user-dev", addresseeId: DEMO_USER_ID, status: "accepted", createdAt: "2026-08-22T00:00:00Z" },
   { id: "f-5", requesterId: "user-rahul", addresseeId: "user-jay", status: "pending", createdAt: "2026-09-01T00:00:00Z" },
+  { id: "f-6", requesterId: "user-priya", addresseeId: DEMO_USER_ID, status: "pending", createdAt: "2026-09-02T00:00:00Z" },
 ];
 
 export const DEMO_GROUPS: Group[] = [

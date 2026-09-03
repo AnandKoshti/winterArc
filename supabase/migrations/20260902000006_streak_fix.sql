@@ -1,5 +1,5 @@
--- Fix longest_streak: it was inflated by counting every goal completion
--- instead of consecutive calendar days. Safe to re-run.
+-- Fix day streak: was incrementing on every goal completion.
+-- Run this in Supabase SQL Editor (safe to re-run).
 
 CREATE OR REPLACE FUNCTION compute_day_streak(p_user_id UUID)
 RETURNS INTEGER
@@ -46,56 +46,14 @@ BEGIN
 END;
 $$;
 
--- Longest run of consecutive calendar days with ≥1 completion
-CREATE OR REPLACE FUNCTION compute_best_streak(p_user_id UUID)
-RETURNS INTEGER
-LANGUAGE plpgsql
-STABLE
-SECURITY DEFINER
-SET search_path = public
-AS $$
-DECLARE
-  v_dates DATE[];
-  v_best INTEGER := 0;
-  v_current INTEGER := 0;
-  i INTEGER;
-BEGIN
-  SELECT ARRAY_AGG(d ORDER BY d ASC)
-  INTO v_dates
-  FROM (
-    SELECT DISTINCT completed_date AS d
-    FROM goal_completions
-    WHERE user_id = p_user_id
-  ) s;
-
-  IF v_dates IS NULL OR COALESCE(array_length(v_dates, 1), 0) = 0 THEN
-    RETURN 0;
-  END IF;
-
-  v_best := 1;
-  v_current := 1;
-  FOR i IN 2..array_length(v_dates, 1) LOOP
-    IF v_dates[i] = (v_dates[i - 1] + 1) THEN
-      v_current := v_current + 1;
-      IF v_current > v_best THEN
-        v_best := v_current;
-      END IF;
-    ELSE
-      v_current := 1;
-    END IF;
-  END LOOP;
-
-  RETURN v_best;
-END;
-$$;
-
--- Overwrite inflated longest_streak (do NOT GREATEST with old value)
+-- Repair inflated streaks now
 UPDATE profiles p
 SET
   streak = compute_day_streak(p.id),
-  longest_streak = GREATEST(compute_day_streak(p.id), compute_best_streak(p.id));
+  longest_streak = GREATEST(p.longest_streak, compute_day_streak(p.id));
 
--- Keep complete_goal using day streak + true best streak
+-- Re-apply complete_goal with correct day-streak logic
+-- (full function body matches supabase/rpc.sql)
 CREATE OR REPLACE FUNCTION complete_goal(p_goal_id UUID)
 RETURNS JSONB
 LANGUAGE plpgsql
@@ -124,7 +82,6 @@ DECLARE
   v_level_bonus_xp INTEGER := 0;
   v_level_bonus_coins INTEGER := 0;
   v_new_streak INTEGER;
-  v_best_streak INTEGER;
   v_streak_updated BOOLEAN := FALSE;
   v_already_today INTEGER;
   v_today DATE := (NOW() AT TIME ZONE 'UTC')::date;
@@ -185,7 +142,6 @@ BEGIN
   UPDATE goals SET streak = streak + 1 WHERE id = p_goal_id;
 
   v_new_streak := compute_day_streak(v_user_id);
-  v_best_streak := compute_best_streak(v_user_id);
   v_streak_updated := (v_already_today = 0);
 
   UPDATE profiles SET
@@ -194,7 +150,7 @@ BEGIN
     level = v_new_level,
     title = get_title_for_level(v_new_level),
     streak = v_new_streak,
-    longest_streak = GREATEST(v_new_streak, v_best_streak)
+    longest_streak = GREATEST(v_profile.longest_streak, v_new_streak)
   WHERE id = v_user_id;
 
   INSERT INTO xp_transactions (user_id, amount, reason)
@@ -222,6 +178,4 @@ BEGIN
 END;
 $$;
 
-GRANT EXECUTE ON FUNCTION compute_day_streak(UUID) TO authenticated;
-GRANT EXECUTE ON FUNCTION compute_best_streak(UUID) TO authenticated;
 GRANT EXECUTE ON FUNCTION complete_goal(UUID) TO authenticated;

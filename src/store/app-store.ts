@@ -54,6 +54,7 @@ import {
   signUpWithProfile,
   signOut as supabaseSignOut,
   completeGoalRpc,
+  uncompleteGoalRpc,
   purchaseRewardRpc,
   saveOnboarding,
   addGoal as addGoalDb,
@@ -113,7 +114,7 @@ interface AppState {
   logout: () => Promise<void>;
   completeOnboarding: (data: OnboardingData) => Promise<void>;
   completeGoal: (goalId: string) => Promise<CompletionResult | null>;
-  uncompleteGoal: (goalId: string) => void;
+  uncompleteGoal: (goalId: string) => Promise<void>;
   addGoal: (goal: Omit<Goal, "id" | "userId" | "arcId" | "streak" | "createdAt">) => Promise<void>;
   updateGoal: (goalId: string, updates: Partial<Goal>) => Promise<void>;
   deleteGoal: (goalId: string) => Promise<void>;
@@ -140,6 +141,7 @@ interface AppState {
   isGoalCompletedToday: (goalId: string) => boolean;
   getFriends: () => User[];
   getPendingRequests: () => Friendship[];
+  getSentRequests: () => Friendship[];
   getGroupMembers: (groupId: string) => User[];
   initDemo: () => void;
   refreshUserData: () => Promise<void>;
@@ -225,8 +227,51 @@ export const useAppStore = create<AppState>()((set, get) => ({
 
   initDemo: () => {
     if (get().supabaseMode) return;
+    const today = getTodayString();
+    const user = DEMO_USERS[0];
+    const pendingIncoming = DEMO_FRIENDSHIPS.filter(
+      (f) => f.status === "pending" && f.addresseeId === user.id
+    );
+    const friendNotifs: Notification[] = pendingIncoming.map((f) => {
+      const requester = DEMO_USERS.find((u) => u.id === f.requesterId);
+      return {
+        id: `n-friend-${f.id}`,
+        userId: user.id,
+        type: "friend" as const,
+        title: "Friend Request",
+        message: `${requester?.name ?? "Someone"} sent you a friend request.`,
+        read: false,
+        createdAt: f.createdAt,
+      };
+    });
+    const dailyExtras: Notification[] = [
+      {
+        id: "n-streak-today",
+        userId: user.id,
+        type: "streak",
+        title: "Streak Reminder",
+        message: `Your ${user.streak}-day streak is waiting. Complete a goal today.`,
+        read: false,
+        createdAt: `${today}T06:00:00Z`,
+      },
+      {
+        id: "n-battle-today",
+        userId: user.id,
+        type: "challenge",
+        title: "Daily Battle",
+        message: "Your Daily Battle has started. Earn XP to climb the board.",
+        read: false,
+        createdAt: `${today}T00:05:00Z`,
+      },
+    ];
+    const existingTitles = new Set(DEMO_NOTIFICATIONS.map((n) => n.title));
+    const merged = [
+      ...friendNotifs,
+      ...dailyExtras.filter((n) => !existingTitles.has(n.title)),
+      ...DEMO_NOTIFICATIONS,
+    ];
     set({
-      currentUser: DEMO_USERS[0],
+      currentUser: user,
       isAuthenticated: true,
       onboardingComplete: true,
       arc: DEMO_ARC,
@@ -237,7 +282,7 @@ export const useAppStore = create<AppState>()((set, get) => ({
       groups: DEMO_GROUPS,
       challenges: DEMO_CHALLENGES,
       activities: DEMO_ACTIVITIES,
-      notifications: DEMO_NOTIFICATIONS,
+      notifications: merged,
       dailyBattle: DEMO_DAILY_BATTLE,
       xpTransactions: DEMO_XP_TRANSACTIONS,
       coinTransactions: DEMO_COIN_TRANSACTIONS,
@@ -396,8 +441,13 @@ export const useAppStore = create<AppState>()((set, get) => ({
   },
 
   isGoalCompletedToday: (goalId) => {
-    const today = getTodayString();
-    return get().completions.some((c) => c.goalId === goalId && c.completedAt.startsWith(today));
+    const localToday = getTodayString();
+    const utcToday = new Date().toISOString().slice(0, 10);
+    return get().completions.some(
+      (c) =>
+        c.goalId === goalId &&
+        (c.completedAt.startsWith(localToday) || c.completedAt.startsWith(utcToday))
+    );
   },
 
   completeGoal: async (goalId) => {
@@ -479,15 +529,58 @@ export const useAppStore = create<AppState>()((set, get) => ({
     return result;
   },
 
-  uncompleteGoal: (goalId) => {
-    if (get().supabaseMode) return;
-    const today = getTodayString();
+  uncompleteGoal: async (goalId) => {
     const state = get();
-    const completion = state.completions.find((c) => c.goalId === goalId && c.completedAt.startsWith(today));
-    if (!completion || !state.currentUser) return;
+    if (!state.currentUser) return;
+
+    // Match local or UTC "today" so timezone edges don't hide the completion
+    const localToday = getTodayString();
+    const utcToday = new Date().toISOString().slice(0, 10);
+    const completion = state.completions.find(
+      (c) =>
+        c.goalId === goalId &&
+        (c.completedAt.startsWith(localToday) || c.completedAt.startsWith(utcToday))
+    );
+    if (!completion) return;
+
+    if (state.supabaseMode) {
+      try {
+        const result = await uncompleteGoalRpc(goalId);
+        set({
+          currentUser: {
+            ...state.currentUser,
+            xp: result.newXp,
+            coins: result.newCoins,
+            level: result.newLevel,
+            title: getTitleForLevel(result.newLevel),
+            streak: result.newStreak,
+            longestStreak: Math.max(state.currentUser.longestStreak, result.newStreak),
+          },
+          completions: state.completions.filter(
+            (c) => !(c.goalId === goalId && (c.id === completion.id || c.completedAt.startsWith(localToday) || c.completedAt.startsWith(utcToday)))
+          ),
+          goals: state.goals.map((g) =>
+            g.id === goalId ? { ...g, streak: Math.max(0, g.streak - 1) } : g
+          ),
+          showPerfectDay: false,
+        });
+        void get().refreshUserData();
+      } catch (e) {
+        const message = e instanceof Error ? e.message : String(e);
+        console.error("Undo goal failed:", message);
+      }
+      return;
+    }
+
     const newXp = Math.max(0, state.currentUser.xp - completion.xpEarned);
     set({
-      currentUser: { ...state.currentUser, xp: newXp, coins: Math.max(0, state.currentUser.coins - completion.coinsEarned), level: getLevelFromXp(newXp), title: getTitleForLevel(getLevelFromXp(newXp)) },
+      currentUser: {
+        ...state.currentUser,
+        xp: newXp,
+        coins: Math.max(0, state.currentUser.coins - completion.coinsEarned),
+        level: getLevelFromXp(newXp),
+        title: getTitleForLevel(getLevelFromXp(newXp)),
+      },
       completions: state.completions.filter((c) => c.id !== completion.id),
       goals: state.goals.map((g) => (g.id === goalId ? { ...g, streak: Math.max(0, g.streak - 1) } : g)),
     });
@@ -565,13 +658,66 @@ export const useAppStore = create<AppState>()((set, get) => ({
     }
     const target = get().allUsers.find((u) => u.username.toLowerCase() === username.toLowerCase());
     if (!target || target.id === user.id) return false;
-    set({ friendships: [...get().friendships, { id: generateId(), requesterId: user.id, addresseeId: target.id, status: "pending", createdAt: new Date().toISOString() }] });
+    const already = get().friendships.some(
+      (f) =>
+        (f.requesterId === user.id && f.addresseeId === target.id) ||
+        (f.requesterId === target.id && f.addresseeId === user.id)
+    );
+    if (already) return false;
+    set({
+      friendships: [
+        ...get().friendships,
+        {
+          id: generateId(),
+          requesterId: user.id,
+          addresseeId: target.id,
+          status: "pending",
+          createdAt: new Date().toISOString(),
+        },
+      ],
+      // Demo: show confirmation for sender; real recipient notif is trigger-based in Supabase
+      notifications: [
+        {
+          id: generateId(),
+          userId: user.id,
+          type: "friend",
+          title: "Friend Request Sent",
+          message: `Invite sent to ${target.name}.`,
+          read: false,
+          createdAt: new Date().toISOString(),
+        },
+        ...get().notifications,
+      ],
+    });
     return true;
   },
 
   acceptFriendRequest: async (id) => {
-    if (get().supabaseMode) { await updateFriendship(id, "accepted"); await get().refreshUserData(); return; }
-    set({ friendships: get().friendships.map((f) => (f.id === id ? { ...f, status: "accepted" as const } : f)) });
+    const state = get();
+    const friendship = state.friendships.find((f) => f.id === id);
+    if (get().supabaseMode) {
+      await updateFriendship(id, "accepted");
+      await get().refreshUserData();
+      return;
+    }
+    const requester = state.allUsers.find((u) => u.id === friendship?.requesterId);
+    set({
+      friendships: state.friendships.map((f) =>
+        f.id === id ? { ...f, status: "accepted" as const } : f
+      ),
+      notifications: [
+        {
+          id: generateId(),
+          userId: state.currentUser!.id,
+          type: "friend",
+          title: "New Friend",
+          message: `You and ${requester?.name ?? "someone"} are now friends.`,
+          read: false,
+          createdAt: new Date().toISOString(),
+        },
+        ...state.notifications,
+      ],
+    });
   },
 
   rejectFriendRequest: async (id) => {
@@ -714,6 +860,12 @@ export const useAppStore = create<AppState>()((set, get) => ({
     const user = get().currentUser;
     if (!user) return [];
     return get().friendships.filter((f) => f.status === "pending" && f.addresseeId === user.id);
+  },
+
+  getSentRequests: () => {
+    const user = get().currentUser;
+    if (!user) return [];
+    return get().friendships.filter((f) => f.status === "pending" && f.requesterId === user.id);
   },
 
   getGroupMembers: (groupId) => {

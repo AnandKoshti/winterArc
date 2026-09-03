@@ -6,7 +6,7 @@ import { ProgressBar } from "./ui/ProgressBar";
 import { Avatar } from "./ui/Avatar";
 import { useEffect, useState } from "react";
 import { cn, formatCountdown, getTimeUntilMidnight } from "@/lib/utils";
-import Link from "next/link";
+import { CompeteEmptyCta } from "./CompeteEmptyCta";
 
 export type BattleScope = "friends" | `group:${string}`;
 
@@ -36,6 +36,7 @@ export function DailyBattleWidget({
   }, []);
 
   const sorted = [...battle.entries].sort((a, b) => b.xpToday - a.xpToday);
+  const hasRivals = sorted.some((e) => e.userId !== currentUserId);
   const maxXp = Math.max(sorted[0]?.xpToday || 1, 1);
   const currentRank = sorted.findIndex((e) => e.userId === currentUserId) + 1;
   const leader = sorted[0];
@@ -88,15 +89,11 @@ export function DailyBattleWidget({
         </p>
       )}
 
-      {sorted.length === 0 ? (
-        <div className="text-center py-4 space-y-2">
-          <p className="text-sm text-arc-muted">
-            {emptyHint ?? "Add friends or join a group to start battling."}
-          </p>
-          <Link href="/friends" className="text-xs text-frost-300 hover:underline">
-            Go to Friends →
-          </Link>
-        </div>
+      {!hasRivals ? (
+        <CompeteEmptyCta
+          compact
+          message={emptyHint ?? "Add friends or join a group to start battling."}
+        />
       ) : (
         <div className="space-y-4">
           {sorted.slice(0, 5).map((entry) => {
@@ -119,7 +116,7 @@ export function DailyBattleWidget({
         </div>
       )}
 
-      {currentRank > 0 && sorted.length > 0 && (
+      {currentRank > 0 && hasRivals && (
         <p className="text-sm text-arc-muted mt-4">
           {currentRank === 1
             ? "Don't give up the lead."
@@ -127,7 +124,7 @@ export function DailyBattleWidget({
         </p>
       )}
 
-      {leaderUser && currentUserId === leader?.userId && sorted.length > 0 && (
+      {leaderUser && currentUserId === leader?.userId && hasRivals && (
         <p className="text-xs text-arc-gold mt-2">
           🏆 Daily Champion · +100 bonus XP · +100 coins
         </p>

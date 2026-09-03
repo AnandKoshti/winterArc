@@ -176,7 +176,8 @@ export const MOBILE_NAV_ITEMS = [
   { href: "/dashboard", label: "Home", icon: "Home" },
   { href: "/goals", label: "Goals", icon: "Target" },
   { href: "/battle", label: "Battle", icon: "Swords" },
-  { href: "/leaderboard", label: "Leaderboard", icon: "Trophy" },
+  { href: "/friends", label: "Friends", icon: "Users" },
+  { href: "/leaderboard", label: "Board", icon: "Trophy" },
   { href: "/profile", label: "Profile", icon: "User" },
 ];
 

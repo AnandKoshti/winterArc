@@ -18,7 +18,7 @@ export type FriendshipStatus = "pending" | "accepted" | "rejected";
 export type ChallengeType = "7-day" | "xp-battle" | "fitness" | "reading" | "custom";
 export type LeaderboardPeriod = "today" | "week" | "month" | "all";
 export type LeaderboardCategory = "overall" | "consistency" | "fitness" | "learning" | "weekly-battle";
-export type NotificationType = "goal" | "streak" | "leaderboard" | "challenge" | "reward" | "achievement";
+export type NotificationType = "goal" | "streak" | "leaderboard" | "challenge" | "reward" | "achievement" | "friend";
 export type CalendarDayStatus = "perfect" | "partial" | "low" | "future" | "empty";
 export type ActivityType = "streak" | "workout" | "battle" | "arc" | "badge" | "level" | "goal";
 

@@ -14,6 +14,7 @@ const TYPE_ICONS: Record<Notification["type"], string> = {
   challenge: "⚔️",
   reward: "🎁",
   achievement: "⭐",
+  friend: "👋",
 };
 
 export function NotificationCenter() {

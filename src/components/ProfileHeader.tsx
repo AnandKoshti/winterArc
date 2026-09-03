@@ -1,10 +1,11 @@
 "use client";
 
+import { useMemo } from "react";
 import { User, Arc } from "@/types";
 import { Avatar } from "./ui/Avatar";
 import { Card } from "./ui/Card";
 import { ProgressBar } from "./ui/ProgressBar";
-import { getArcDay, getArcProgress } from "@/lib/utils";
+import { computeBestStreak, getArcDay, getArcProgress } from "@/lib/utils";
 import { BADGES } from "@/lib/game-logic";
 import { useAppStore } from "@/store/app-store";
 
@@ -14,7 +15,7 @@ interface ProfileHeaderProps {
 }
 
 export function ProfileHeader({ user, arc }: ProfileHeaderProps) {
-  const { userBadges } = useAppStore();
+  const { userBadges, goals, completions } = useAppStore();
   const unlockedBadges = userBadges
     .filter((ub) => ub.userId === user.id)
     .map((ub) => BADGES.find((b) => b.id === ub.badgeId))
@@ -22,7 +23,31 @@ export function ProfileHeader({ user, arc }: ProfileHeaderProps) {
 
   const arcDay = arc ? getArcDay(arc.startDate) : 0;
   const arcProgress = arc ? getArcProgress(arcDay, arc.durationDays) : 0;
-  const completionRate = 89;
+
+  const stats = useMemo(() => {
+    const userCompletions = completions.filter((c) => c.userId === user.id);
+    const goalsCompleted = userCompletions.length;
+
+    const activeDailyGoals = goals.filter(
+      (g) => g.userId === user.id && !g.isPaused && g.frequency === "daily"
+    ).length;
+    const daysInArc = arc
+      ? Math.min(Math.max(getArcDay(arc.startDate), 1), arc.durationDays)
+      : 1;
+    const expected = activeDailyGoals * daysInArc;
+    const completionRate =
+      expected > 0 ? Math.min(100, Math.round((goalsCompleted / expected) * 100)) : 0;
+
+    // Prefer stored longestStreak after load (recomputed from all completion days).
+    // Never fall back to goalsCompleted — that was the old bug.
+    const bestStreak = Math.max(
+      user.longestStreak,
+      user.streak,
+      computeBestStreak(userCompletions.map((c) => c.completedAt))
+    );
+
+    return { goalsCompleted, completionRate, bestStreak };
+  }, [completions, goals, user.id, user.longestStreak, user.streak, arc]);
 
   return (
     <div className="space-y-6">
@@ -61,15 +86,15 @@ export function ProfileHeader({ user, arc }: ProfileHeaderProps) {
 
       <div className="grid grid-cols-2 gap-3">
         <Card variant="glass" className="text-center">
-          <p className="text-2xl font-bold">124</p>
+          <p className="text-2xl font-bold">{stats.goalsCompleted}</p>
           <p className="text-xs text-arc-muted">Goals Completed</p>
         </Card>
         <Card variant="glass" className="text-center">
-          <p className="text-2xl font-bold">{completionRate}%</p>
+          <p className="text-2xl font-bold">{stats.completionRate}%</p>
           <p className="text-xs text-arc-muted">Completion Rate</p>
         </Card>
         <Card variant="glass" className="text-center">
-          <p className="text-2xl font-bold">{user.longestStreak}</p>
+          <p className="text-2xl font-bold">{stats.bestStreak}</p>
           <p className="text-xs text-arc-muted">Best Streak</p>
         </Card>
         <Card variant="glass" className="text-center">
